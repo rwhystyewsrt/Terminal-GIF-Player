@@ -1,12 +1,12 @@
 /*
  * stm32_gif_player.ino
- * STM32F103RET6 + ST7735L 2.4" TFT SPI 240x320 GIF播放器
+ * STM32F103RET6 + ST7735S 2.4" TFT SPI 240x320 GIF播放器
  * 通过USB CDC接收PC端预解码的GIF帧, 存入Flash, 循环播放
  *
- * 软件SPI引脚 (连续PA4-PA10, 方便接线):
+ * 硬件SPI1引脚 (连续PA4-PA10, 方便接线):
  *   PA4  - CS    (Chip Select)
  *   PA5  - SCK   (SPI Clock)
- *   PA6  - MISO  (SPI Data In, 未使用)
+ *   PA6  - MISO  (SPI Data In)
  *   PA7  - MOSI  (SPI Data Out)
  *   PA8  - LED   (Backlight PWM)
  *   PA9  - DC    (Data/Command)
@@ -19,6 +19,7 @@
  *   4. 本目录下 build_opt.h 自动增大USB CDC缓冲区
  */
 
+#include <SPI.h>
 #include <Arduino.h>
 
 // ==================== 引脚定义 ====================
@@ -29,8 +30,10 @@
 #define TFT_LED   PA8
 #define TFT_DC    PA9
 #define TFT_RST   PA10
+#define LED_ON    HIGH
+#define LED_OFF   LOW
 
-// ==================== ST7735L 命令 ====================
+// ==================== ST7735S 命令 ====================
 #define ST7735_SWRESET 0x01
 #define ST7735_SLPOUT  0x11
 #define ST7735_NORON   0x13
@@ -112,43 +115,26 @@ static void sendReady() { sendResponse(RESP_READY); }
 static void sendAck()   { sendResponse(RESP_ACK); }
 static void sendNack()  { sendResponse(RESP_NACK); }
 
-// ==================== ST7735S 驱动 (软件SPI) ====================
-
-// 软件 SPI：使用 GPIOA BSRR 直接操作 PA7(MOSI)/PA5(SCK)，尽量快
-static inline void swSpiWriteByte(uint8_t b) {
-  for (int8_t i = 7; i >= 0; i--) {
-    if (b & (1 << i)) GPIOA->BSRR = GPIO_BSRR_BS7; else GPIOA->BSRR = GPIO_BSRR_BR7;
-    GPIOA->BSRR = GPIO_BSRR_BS5;
-    GPIOA->BSRR = GPIO_BSRR_BR5;
-  }
-}
-
-static inline void swSpiWriteWord(uint16_t w) {
-  for (int8_t i = 15; i >= 0; i--) {
-    if (w & (1 << i)) GPIOA->BSRR = GPIO_BSRR_BS7; else GPIOA->BSRR = GPIO_BSRR_BR7;
-    GPIOA->BSRR = GPIO_BSRR_BS5;
-    GPIOA->BSRR = GPIO_BSRR_BR5;
-  }
-}
+// ==================== ST7735S 驱动 (硬件SPI) ====================
 
 static void tftWriteCmd(uint8_t cmd) {
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, LOW);
-  swSpiWriteByte(cmd);
+  SPI.transfer(cmd);
   digitalWrite(TFT_CS, HIGH);
 }
 
 static void tftWriteData(uint8_t data) {
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, HIGH);
-  swSpiWriteByte(data);
+  SPI.transfer(data);
   digitalWrite(TFT_CS, HIGH);
 }
 
 static void tftWriteData16(uint16_t data) {
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, HIGH);
-  swSpiWriteWord(data);
+  SPI.transfer16(data);
   digitalWrite(TFT_CS, HIGH);
 }
 
@@ -158,28 +144,22 @@ static void tftWriteCmdDataBytes(uint8_t cmd, const uint8_t* data, uint16_t len)
     digitalWrite(TFT_CS, LOW);
     digitalWrite(TFT_DC, HIGH);
     for (uint16_t i = 0; i < len; i++) {
-      swSpiWriteByte(data[i]);
+      SPI.transfer(data[i]);
     }
     digitalWrite(TFT_CS, HIGH);
   }
 }
 
 static void tftSetAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-  // CASET: 列地址窗口
-  digitalWrite(TFT_CS, LOW);
-  digitalWrite(TFT_DC, LOW);
-  swSpiWriteByte(ST7735_CASET);
-  digitalWrite(TFT_DC, HIGH);
-  swSpiWriteByte(0x00); swSpiWriteByte(x0);
-  swSpiWriteByte(0x00); swSpiWriteByte(x1);
+  tftWriteCmd(ST7735_CASET);
+  tftWriteData16(x0);
+  tftWriteData16(x1);
 
-  // RASET: 行地址窗口
-  digitalWrite(TFT_DC, LOW);
-  swSpiWriteByte(ST7735_RASET);
-  digitalWrite(TFT_DC, HIGH);
-  swSpiWriteByte(0x00); swSpiWriteByte(y0);
-  swSpiWriteByte(0x00); swSpiWriteByte(y1);
-  digitalWrite(TFT_CS, HIGH);
+  tftWriteCmd(ST7735_RASET);
+  tftWriteData16(y0);
+  tftWriteData16(y1);
+
+  tftWriteCmd(ST7735_RAMWR);
 }
 
 static void tftFillScreen(uint16_t color) {
@@ -190,7 +170,7 @@ static void tftFillScreen(uint16_t color) {
   digitalWrite(TFT_DC, HIGH);
   uint32_t total = (uint32_t)g_frameWidth * g_frameHeight;
   for (uint32_t i = 0; i < total; i++) {
-    swSpiWriteWord(color);
+    SPI.transfer16(color);
   }
   digitalWrite(TFT_CS, HIGH);
 }
@@ -201,7 +181,7 @@ static void tftFillScreenDirect(uint16_t color, uint16_t w, uint16_t h) {
   digitalWrite(TFT_DC, HIGH);
   uint32_t total = (uint32_t)w * h;
   for (uint32_t i = 0; i < total; i++) {
-    swSpiWriteWord(color);
+    SPI.transfer16(color);
   }
   digitalWrite(TFT_CS, HIGH);
 }
@@ -308,19 +288,11 @@ static void tftInit() {
   tftWriteCmd(ST7735_DISPON);
   delay(100);
 
-  // ST7735L 部分批次需要 INVOFF 后额外发送 DISPON，这里再发一次确保显示正常
-  tftWriteCmd(ST7735_INVOFF);
-  delay(10);
-  tftWriteCmd(ST7735_DISPON);
-  delay(10);
-
-  digitalWrite(TFT_LED, HIGH);
+  digitalWrite(TFT_LED, LED_ON);
 
   // 清屏并显示等待提示
   tftFillScreenDirect(0x0000, 128, 128);
   drawString(16, 60, "Waiting for data", 0xFFFF);
-
-  // 普通 TFT 模块无 TE 引脚，无需配置
 }
 
 // 简易 5x7 字体 'A'-'Z', 'a'-'z', '0'-'9', 空格, '-'
@@ -408,7 +380,7 @@ static void drawChar(uint16_t x, uint16_t y, char c, uint16_t color) {
   for (int8_t row = 0; row < 7; row++) {
     for (int8_t col = 0; col < 5; col++) {
       bool on = (font5x7[idx][col] >> row) & 1;
-      swSpiWriteWord(on ? color : 0x0000);
+      SPI.transfer16(on ? color : 0x0000);
     }
   }
   digitalWrite(TFT_CS, HIGH);
@@ -650,16 +622,14 @@ static void playFrames() {
   tftSetAddrWindow(0, 0, g_frameWidth - 1, g_frameHeight - 1);
 
   digitalWrite(TFT_CS, LOW);
-  digitalWrite(TFT_DC, LOW);
-  swSpiWriteByte(ST7735_RAMWR);
   digitalWrite(TFT_DC, HIGH);
 
-  // 从Flash直接读取RGB565数据并发送到软件SPI
+  // 从Flash直接读取RGB565数据并发送到硬件SPI
   uint32_t totalPixels = (uint32_t)g_frameWidth * g_frameHeight;
   const uint16_t* flashData = (const uint16_t*)flashAddr;
 
   for (uint32_t i = 0; i < totalPixels; i++) {
-    swSpiWriteWord(flashData[i]);
+    SPI.transfer16(flashData[i]);
   }
 
   digitalWrite(TFT_CS, HIGH);
@@ -678,13 +648,15 @@ void setup() {
   pinMode(TFT_RST, OUTPUT);
   pinMode(TFT_LED, OUTPUT);
   digitalWrite(TFT_CS, HIGH);
-  digitalWrite(TFT_LED, LOW);
+  digitalWrite(TFT_LED, LED_OFF);
 
-  // 软件SPI 引脚初始化
-  pinMode(TFT_MOSI, OUTPUT);
-  pinMode(TFT_SCK, OUTPUT);
-  digitalWrite(TFT_SCK, LOW);
-  digitalWrite(TFT_MOSI, LOW);
+  // 硬件SPI1 (PA5/PA6/PA7是默认SPI1引脚)
+  SPI.setMOSI(TFT_MOSI);
+  SPI.setMISO(TFT_MISO);
+  SPI.setSCLK(TFT_SCK);
+  SPI.begin();
+  SPI.setClockDivider(SPI_CLOCK_DIV4);  // 18MHz (72/4)
+  SPI.setBitOrder(MSBFIRST);
 
   tftInit();
 
