@@ -1,6 +1,6 @@
 /*
  * stm32_gif_player.ino
- * STM32F103RET6 + ST7735S 2.4" TFT SPI 240x320 GIF播放器
+ * STM32F103RET6 + ST7735L 2.4" TFT SPI 240x320 GIF播放器
  * 通过USB CDC接收PC端预解码的GIF帧, 存入Flash, 循环播放
  *
  * 软件SPI引脚 (连续PA4-PA10, 方便接线):
@@ -11,7 +11,6 @@
  *   PA8  - LED   (Backlight PWM)
  *   PA9  - DC    (Data/Command)
  *   PA10 - RESET (Display Reset)
- *   PA3  - TE    (Tearing Effect)
  *
  * 编译:
  *   1. 安装STM32duino: https://github.com/stm32duino/Arduino_Core_STM32
@@ -31,7 +30,7 @@
 #define TFT_DC    PA9
 #define TFT_RST   PA10
 
-// ==================== ST7735S 命令 ====================
+// ==================== ST7735L 命令 ====================
 #define ST7735_SWRESET 0x01
 #define ST7735_SLPOUT  0x11
 #define ST7735_NORON   0x13
@@ -166,28 +165,20 @@ static void tftWriteCmdDataBytes(uint8_t cmd, const uint8_t* data, uint16_t len)
 }
 
 static void tftSetAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-  // CASET: 列地址窗口，带 8 位填充
+  // CASET: 列地址窗口
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, LOW);
   swSpiWriteByte(ST7735_CASET);
   digitalWrite(TFT_DC, HIGH);
   swSpiWriteByte(0x00); swSpiWriteByte(x0);
   swSpiWriteByte(0x00); swSpiWriteByte(x1);
-  digitalWrite(TFT_CS, HIGH);
 
-  // RASET: 行地址窗口，带 8 位填充
-  digitalWrite(TFT_CS, LOW);
+  // RASET: 行地址窗口
   digitalWrite(TFT_DC, LOW);
   swSpiWriteByte(ST7735_RASET);
   digitalWrite(TFT_DC, HIGH);
   swSpiWriteByte(0x00); swSpiWriteByte(y0);
   swSpiWriteByte(0x00); swSpiWriteByte(y1);
-  digitalWrite(TFT_CS, HIGH);
-
-  // RAMWR
-  digitalWrite(TFT_CS, LOW);
-  digitalWrite(TFT_DC, LOW);
-  swSpiWriteByte(ST7735_RAMWR);
   digitalWrite(TFT_CS, HIGH);
 }
 
@@ -240,7 +231,7 @@ static void tftInit() {
   tftWriteCmd(ST7735_SLPOUT);
   delay(120);
 
-  // 帧速率控制：中等刷新率，兼顾流畅与撕裂
+  // ST7735L 典型初始化序列
   {
     uint8_t frm1[] = { 0x01, 0x2C, 0x2D };
     tftWriteCmdDataBytes(ST7735_FRMCTR1, frm1, 3);
@@ -254,13 +245,11 @@ static void tftInit() {
     tftWriteCmdDataBytes(ST7735_FRMCTR3, frm3, 6);
   }
 
-  // 反转控制
   {
     uint8_t inv = 0x07;
     tftWriteCmdDataBytes(ST7735_INVCTR, &inv, 1);
   }
 
-  // 电源控制
   {
     uint8_t pw1[] = { 0xA2, 0x02, 0x84 };
     tftWriteCmdDataBytes(ST7735_PWCTR1, pw1, 3);
@@ -287,7 +276,6 @@ static void tftInit() {
     tftWriteCmdDataBytes(ST7735_VMCTR1, &vm, 1);
   }
 
-  // 显示不反转
   tftWriteCmd(ST7735_INVOFF);
 
   // 16-bit RGB565
@@ -296,7 +284,7 @@ static void tftInit() {
     tftWriteCmdDataBytes(ST7735_COLMOD, &cm, 1);
   }
 
-  // MADCTL: MY=1, MX=1, MV=0, ML=0, RGB=0, MH=0
+  // MADCTL: MY=1, MX=1, MV=0, RGB
   {
     uint8_t mad = 0xC0;
     tftWriteCmdDataBytes(ST7735_MADCTL, &mad, 1);
@@ -319,6 +307,12 @@ static void tftInit() {
 
   tftWriteCmd(ST7735_DISPON);
   delay(100);
+
+  // ST7735L 部分批次需要 INVOFF 后额外发送 DISPON，这里再发一次确保显示正常
+  tftWriteCmd(ST7735_INVOFF);
+  delay(10);
+  tftWriteCmd(ST7735_DISPON);
+  delay(10);
 
   digitalWrite(TFT_LED, HIGH);
 
