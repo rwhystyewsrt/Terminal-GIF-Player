@@ -566,9 +566,14 @@ void setup() {
     delay(10);
   }
 
-  delay(200);
+  delay(500);
   Serial.flush();
-  sendReady();
+
+  // 发送多次 READY，方便 PC 端在任意时间连接后都能同步
+  for (int i = 0; i < 5; i++) {
+    sendReady();
+    delay(50);
+  }
 }
 
 void loop() {

@@ -204,35 +204,29 @@ def recv_response(ser, timeout=10):
 def wait_ready(ser, timeout=30):
     """等待STM32就绪"""
     print("等待STM32就绪...")
-    ser.timeout = timeout
     ser.reset_input_buffer()
     ser.reset_output_buffer()
 
     # 等待READY信号
     start = time.time()
     while time.time() - start < timeout:
-        magic = ser.read(4)
-        if magic == MAGIC:
-            resp = ser.read(1)
-            if resp and resp[0] == RESP_READY:
-                # 读取剩余payload长度
-                len_bytes = ser.read(2)
-                print("  STM32已就绪!")
-                return True
-        elif magic:
-            # 非MAGIC字节，跳过
-            continue
+        code, _ = _read_packet(ser, timeout=0.5)
+        if code == RESP_READY:
+            print("  STM32已就绪!")
+            return True
+
     return False
 
 
-def wait_for_response(ser, expected_codes, timeout=10):
-    """等待指定响应码之一，返回 (resp_code, payload)"""
+def _read_packet(ser, timeout=10):
+    """从串口读取一个协议包，返回 (code, payload) 或 (None, None)"""
     ser.timeout = timeout
     while True:
         magic = ser.read(4)
         if len(magic) < 4:
             return None, None
         if magic != MAGIC:
+            print(f"  调试: 收到非MAGIC数据: {magic.hex()}")
             continue
         resp = ser.read(1)
         if len(resp) < 1:
@@ -242,25 +236,30 @@ def wait_for_response(ser, expected_codes, timeout=10):
             return resp[0], b''
         payload_len = struct.unpack('<H', len_bytes)[0]
         payload = ser.read(payload_len) if payload_len > 0 else b''
-        if resp[0] in expected_codes:
-            return resp[0], payload
+        print(f"  调试: 收到包 code={resp[0]}, payload_len={payload_len}")
+        return resp[0], payload
+
+
+def wait_for_response(ser, expected_codes, timeout=10):
+    """等待指定响应码之一，返回 (resp_code, payload)"""
+    start = time.time()
+    while time.time() - start < timeout:
+        code, payload = _read_packet(ser, timeout=min(0.5, timeout))
+        if code is None:
+            continue
+        if code in expected_codes:
+            return code, payload
+    return None, None
 
 
 def wait_ready_signal(ser, timeout=10):
     """等待STM32发送READY信号"""
-    ser.timeout = timeout
-    while True:
-        magic = ser.read(4)
-        if len(magic) < 4:
-            return False
-        if magic != MAGIC:
-            continue
-        resp = ser.read(1)
-        if len(resp) < 1:
-            return False
-        len_bytes = ser.read(2)
-        if resp[0] == RESP_READY:
+    start = time.time()
+    while time.time() - start < timeout:
+        code, _ = _read_packet(ser, timeout=min(0.5, timeout))
+        if code == RESP_READY:
             return True
+    return False
 
 
 def send_frames(ser, frames, frame_delay_ms):
@@ -415,13 +414,15 @@ def main():
     list_serial_ports()
 
     # 连接串口
-    print(f"\n连接串口 {port}...")
+    print(f"连接串口 {port}...")
     try:
         ser = serial.Serial(
             port=port,
             baudrate=baud_rate,
             timeout=timeout,
             write_timeout=timeout,
+            dsrdtr=False,
+            rtscts=False,
         )
     except serial.SerialException as e:
         print(f"错误: 无法打开串口 {port}: {e}")
