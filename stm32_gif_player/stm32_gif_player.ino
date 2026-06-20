@@ -139,6 +139,7 @@ static void tftWriteData16(uint16_t data) {
 static void tftWriteCmdDataBytes(uint8_t cmd, const uint8_t* data, uint16_t len) {
   digitalWrite(TFT_CS, LOW);
 
+  noInterrupts();
   digitalWrite(TFT_DC, LOW);
   SPI.transfer(cmd);
 
@@ -148,6 +149,7 @@ static void tftWriteCmdDataBytes(uint8_t cmd, const uint8_t* data, uint16_t len)
       SPI.transfer(data[i]);
     }
   }
+  interrupts();
 
   digitalWrite(TFT_CS, HIGH);
 }
@@ -157,6 +159,7 @@ static void tftSetAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
   // 注意：调用者需要在写完后自己拉高 CS
   digitalWrite(TFT_CS, LOW);
 
+  noInterrupts();
   digitalWrite(TFT_DC, LOW);
   SPI.transfer(ST7735_CASET);
   digitalWrite(TFT_DC, HIGH);
@@ -172,6 +175,7 @@ static void tftSetAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
   digitalWrite(TFT_DC, LOW);
   SPI.transfer(ST7735_RAMWR);
   digitalWrite(TFT_DC, HIGH);
+  interrupts();
 }
 
 static void tftFillScreen(uint16_t color) {
@@ -179,18 +183,22 @@ static void tftFillScreen(uint16_t color) {
   tftSetAddrWindow(0, 0, g_frameWidth - 1, g_frameHeight - 1);
 
   uint32_t total = (uint32_t)g_frameWidth * g_frameHeight;
+  noInterrupts();
   for (uint32_t i = 0; i < total; i++) {
     SPI.transfer16(color);
   }
+  interrupts();
   digitalWrite(TFT_CS, HIGH);
 }
 
 static void tftFillScreenDirect(uint16_t color, uint16_t w, uint16_t h) {
   tftSetAddrWindow(0, 0, w - 1, h - 1);
   uint32_t total = (uint32_t)w * h;
+  noInterrupts();
   for (uint32_t i = 0; i < total; i++) {
     SPI.transfer16(color);
   }
+  interrupts();
   digitalWrite(TFT_CS, HIGH);
 }
 
@@ -388,12 +396,14 @@ static void drawChar(uint16_t x, uint16_t y, char c, uint16_t color) {
   tftSetAddrWindow(x, y, x + 4, y + 6);
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, HIGH);
+  noInterrupts();
   for (int8_t row = 0; row < 7; row++) {
     for (int8_t col = 0; col < 5; col++) {
       bool on = (font5x7[idx][col] >> row) & 1;
       SPI.transfer16(on ? color : 0x0000);
     }
   }
+  interrupts();
   digitalWrite(TFT_CS, HIGH);
 }
 
@@ -623,9 +633,13 @@ static void playFrames() {
 
   static uint16_t currentFrame  = 0;
   static uint32_t lastFrameTime = 0;
+  static bool     busy          = false;
+
+  if (busy) return;
+  busy = true;
 
   uint32_t now = millis();
-  if (now - lastFrameTime < g_frameDelayMs) return;
+  if (now - lastFrameTime < g_frameDelayMs) { busy = false; return; }
   lastFrameTime = now;
 
   uint32_t flashAddr = g_frameOffsets[currentFrame];
@@ -637,8 +651,16 @@ static void playFrames() {
   uint32_t totalPixels = (uint32_t)g_frameWidth * g_frameHeight;
   const uint16_t* flashData = (const uint16_t*)flashAddr;
 
-  for (uint32_t i = 0; i < totalPixels; i++) {
-    SPI.transfer16(flashData[i]);
+  // 分块关中断：每256个像素关一次，避免USB CDC长时间被阻塞
+  const uint32_t CHUNK = 256;
+  for (uint32_t offset = 0; offset < totalPixels; offset += CHUNK) {
+    uint32_t end = offset + CHUNK;
+    if (end > totalPixels) end = totalPixels;
+    noInterrupts();
+    for (uint32_t i = offset; i < end; i++) {
+      SPI.transfer16(flashData[i]);
+    }
+    interrupts();
   }
 
   digitalWrite(TFT_CS, HIGH);
@@ -647,6 +669,7 @@ static void playFrames() {
   if (currentFrame >= g_frameCount) {
     currentFrame = 0;
   }
+  busy = false;
 }
 
 // ==================== 初始化 ====================
@@ -664,7 +687,7 @@ void setup() {
   SPI.setMISO(TFT_MISO);
   SPI.setSCLK(TFT_SCK);
   SPI.begin();
-  SPI.setClockDivider(SPI_CLOCK_DIV16);  // 4.5MHz (72/16), 提高稳定性
+  SPI.setClockDivider(SPI_CLOCK_DIV8);  // 9MHz (72/8)
   SPI.setBitOrder(MSBFIRST);
 
   tftInit();
