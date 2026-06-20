@@ -30,6 +30,7 @@
 #define TFT_LED   PA8
 #define TFT_DC    PA9
 #define TFT_RST   PA10
+#define TFT_TE    PA3   // Tearing Effect 输入引脚
 
 // ==================== ST7735S 命令 ====================
 #define ST7735_SWRESET 0x01
@@ -265,11 +266,15 @@ static void tftInit() {
     tftWriteCmdDataBytes(ST7735_COLMOD, &cm, 1);
   }
 
-  // MADCTL: MX=1, MY=1, MV=0, BGR=0
+  // MADCTL: MY=1, MX=1, MV=0, ML=0, RGB=0, MH=0, 打开 tearing output
   {
     uint8_t mad = 0xC0;
     tftWriteCmdDataBytes(ST7735_MADCTL, &mad, 1);
   }
+
+  // 开启 Tearing Effect Output 信号，VSYNC 同步
+  tftWriteCmd(0x35); // TEON
+  tftWriteData(0x00); // V-blanking only
 
   // Gamma
   {
@@ -294,6 +299,9 @@ static void tftInit() {
   // 清屏并显示等待提示
   tftFillScreenDirect(0x0000, 128, 128);
   drawString(16, 60, "Waiting for data", 0xFFFF);
+
+  // Tearing Effect 输入：接屏模块 TE 引脚；若未连接则悬空，内部上拉保证不漂移
+  pinMode(TFT_TE, INPUT_PULLUP);
 }
 
 // 简易 5x7 字体 'A'-'Z', 'a'-'z', '0'-'9', 空格, '-'
@@ -608,6 +616,14 @@ static void handleStop() {
 
 // ==================== 帧播放 ====================
 
+static void waitForVSync() {
+  // 等待 Tearing Effect 信号：TE 低电平表示 V-blanking 期间
+  // 若模块未连接 TE 引脚，INPUT_PULLUP 会保持高电平，则此函数 20ms 后超时返回
+  uint32_t start = millis();
+  // 先等到 TE 变低（V-blanking 开始）
+  while (digitalRead(TFT_TE) == HIGH && (millis() - start) < 20) {}
+}
+
 static void playFrames() {
   if (!g_playing || g_frameCount == 0) return;
 
@@ -620,7 +636,11 @@ static void playFrames() {
 
   uint32_t flashAddr = g_frameOffsets[currentFrame];
 
+  // 设置地址窗口（此时 TE 可能为任意状态）
   tftSetAddrWindow(0, 0, g_frameWidth - 1, g_frameHeight - 1);
+
+  // 等待下一个 V-Blank 开始再发送 GRAM 数据，避免撕裂
+  waitForVSync();
 
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, HIGH);
