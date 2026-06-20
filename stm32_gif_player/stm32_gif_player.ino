@@ -210,17 +210,17 @@ static void tftInit() {
   tftWriteCmd(ST7735_SLPOUT);
   delay(120);
 
-  // 帧速率控制
+  // 帧速率控制：降低帧率以匹配 SPI 写 GRAM 速度，避免撕裂
   {
-    uint8_t frm1[] = { 0x01, 0x2C, 0x2D };
+    uint8_t frm1[] = { 0x00, 0x08, 0x08 }; // 约 30Hz
     tftWriteCmdDataBytes(ST7735_FRMCTR1, frm1, 3);
   }
   {
-    uint8_t frm2[] = { 0x01, 0x2C, 0x2D };
+    uint8_t frm2[] = { 0x00, 0x08, 0x08 };
     tftWriteCmdDataBytes(ST7735_FRMCTR2, frm2, 3);
   }
   {
-    uint8_t frm3[] = { 0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D };
+    uint8_t frm3[] = { 0x00, 0x08, 0x08, 0x00, 0x08, 0x08 };
     tftWriteCmdDataBytes(ST7735_FRMCTR3, frm3, 6);
   }
 
@@ -618,10 +618,9 @@ static void handleStop() {
 
 static void waitForVSync() {
   // 等待 Tearing Effect 信号：TE 低电平表示 V-blanking 期间
-  // 若模块未连接 TE 引脚，INPUT_PULLUP 会保持高电平，则此函数 20ms 后超时返回
+  // 若模块未连接 TE 引脚，INPUT_PULLUP 会保持高电平，则此函数 50ms 后超时返回
   uint32_t start = millis();
-  // 先等到 TE 变低（V-blanking 开始）
-  while (digitalRead(TFT_TE) == HIGH && (millis() - start) < 20) {}
+  while (digitalRead(TFT_TE) == HIGH && (millis() - start) < 50) {}
 }
 
 static void playFrames() {
@@ -676,7 +675,7 @@ void setup() {
   SPI.setMISO(TFT_MISO);
   SPI.setSCLK(TFT_SCK);
   SPI.begin();
-  SPI.setClockDivider(SPI_CLOCK_DIV4);  // 18MHz (72/4)
+  SPI.setClockDivider(SPI_CLOCK_DIV32);  // 2.25MHz (72/32)，进一步降低SPI速度以减少画面撕裂
   SPI.setBitOrder(MSBFIRST);
 
   tftInit();
