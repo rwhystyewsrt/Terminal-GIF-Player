@@ -560,7 +560,7 @@ void setup() {
   tftInit();
 
   // 等待USB CDC
-  Serial.begin();
+  Serial.begin(115200);
   uint32_t t0 = millis();
   while (!Serial && (millis() - t0 < 3000)) {
     delay(10);
