@@ -30,7 +30,6 @@
 #define TFT_LED   PA8
 #define TFT_DC    PA9
 #define TFT_RST   PA10
-#define TFT_TE    PA3   // Tearing Effect 输入引脚
 
 // ==================== ST7735S 命令 ====================
 #define ST7735_SWRESET 0x01
@@ -241,17 +240,17 @@ static void tftInit() {
   tftWriteCmd(ST7735_SLPOUT);
   delay(120);
 
-  // 帧速率控制：用最低刷新率，让 GRAM 写入时间远小于帧周期
+  // 帧速率控制：中等刷新率，兼顾流畅与撕裂
   {
-    uint8_t frm1[] = { 0x00, 0x01, 0x01 }; // 约 15Hz，降低撕裂概率
+    uint8_t frm1[] = { 0x01, 0x2C, 0x2D };
     tftWriteCmdDataBytes(ST7735_FRMCTR1, frm1, 3);
   }
   {
-    uint8_t frm2[] = { 0x00, 0x01, 0x01 };
+    uint8_t frm2[] = { 0x01, 0x2C, 0x2D };
     tftWriteCmdDataBytes(ST7735_FRMCTR2, frm2, 3);
   }
   {
-    uint8_t frm3[] = { 0x00, 0x01, 0x01, 0x00, 0x01, 0x01 };
+    uint8_t frm3[] = { 0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D };
     tftWriteCmdDataBytes(ST7735_FRMCTR3, frm3, 6);
   }
 
@@ -297,15 +296,11 @@ static void tftInit() {
     tftWriteCmdDataBytes(ST7735_COLMOD, &cm, 1);
   }
 
-  // MADCTL: MY=1, MX=1, MV=0, ML=0, RGB=0, MH=0, 打开 tearing output
+  // MADCTL: MY=1, MX=1, MV=0, ML=0, RGB=0, MH=0
   {
     uint8_t mad = 0xC0;
     tftWriteCmdDataBytes(ST7735_MADCTL, &mad, 1);
   }
-
-  // 开启 Tearing Effect Output 信号，VSYNC 同步
-  tftWriteCmd(0x35); // TEON
-  tftWriteData(0x00); // V-blanking only
 
   // Gamma
   {
@@ -331,8 +326,7 @@ static void tftInit() {
   tftFillScreenDirect(0x0000, 128, 128);
   drawString(16, 60, "Waiting for data", 0xFFFF);
 
-  // Tearing Effect 输入：接屏模块 TE 引脚；若未连接则悬空，内部上拉保证不漂移
-  pinMode(TFT_TE, INPUT_PULLUP);
+  // 普通 TFT 模块无 TE 引脚，无需配置
 }
 
 // 简易 5x7 字体 'A'-'Z', 'a'-'z', '0'-'9', 空格, '-'
@@ -647,13 +641,6 @@ static void handleStop() {
 
 // ==================== 帧播放 ====================
 
-static void waitForVSync() {
-  // 等待 Tearing Effect 信号：TE 低电平表示 V-blanking 期间
-  // 若模块未连接 TE 引脚，INPUT_PULLUP 会保持高电平，则此函数 50ms 后超时返回
-  uint32_t start = millis();
-  while (digitalRead(TFT_TE) == HIGH && (millis() - start) < 50) {}
-}
-
 static void playFrames() {
   if (!g_playing || g_frameCount == 0) return;
 
@@ -666,10 +653,6 @@ static void playFrames() {
 
   uint32_t flashAddr = g_frameOffsets[currentFrame];
 
-  // 等待下一个 V-Blank 开始
-  waitForVSync();
-
-  // 在 V-Blank 期间开始写 GRAM：先发 RAMWR，再尽量快地写完整帧
   tftSetAddrWindow(0, 0, g_frameWidth - 1, g_frameHeight - 1);
 
   digitalWrite(TFT_CS, LOW);
