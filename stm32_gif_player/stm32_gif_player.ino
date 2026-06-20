@@ -683,6 +683,16 @@ static void playFrames() {
 // ==================== 初始化 ====================
 
 void setup() {
+  // 板载 LED 复位指示：上电后快速闪 3 次
+  // 如果看到 LED 不停闪，说明 MCU 在不断复位
+  pinMode(LED_BUILTIN, OUTPUT);
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_BUILTIN, LOW);   // 多数板子 LED 低电平亮
+    delay(100);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(100);
+  }
+
   pinMode(TFT_CS, OUTPUT);
   pinMode(TFT_DC, OUTPUT);
   pinMode(TFT_RST, OUTPUT);
