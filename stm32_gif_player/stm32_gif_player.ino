@@ -3,14 +3,15 @@
  * STM32F103RET6 + ST7735S 2.4" TFT SPI 240x320 GIF播放器
  * 通过USB CDC接收PC端预解码的GIF帧, 存入Flash, 循环播放
  *
- * 硬件SPI1引脚 (连续PA4-PA10, 方便接线):
+ * 软件SPI引脚 (连续PA4-PA10, 方便接线):
  *   PA4  - CS    (Chip Select)
  *   PA5  - SCK   (SPI Clock)
- *   PA6  - MISO  (SPI Data In)
+ *   PA6  - MISO  (SPI Data In, 未使用)
  *   PA7  - MOSI  (SPI Data Out)
  *   PA8  - LED   (Backlight PWM)
  *   PA9  - DC    (Data/Command)
  *   PA10 - RESET (Display Reset)
+ *   PA3  - TE    (Tearing Effect)
  *
  * 编译:
  *   1. 安装STM32duino: https://github.com/stm32duino/Arduino_Core_STM32
@@ -19,7 +20,6 @@
  *   4. 本目录下 build_opt.h 自动增大USB CDC缓冲区
  */
 
-#include <SPI.h>
 #include <Arduino.h>
 
 // ==================== 引脚定义 ====================
@@ -114,26 +114,43 @@ static void sendReady() { sendResponse(RESP_READY); }
 static void sendAck()   { sendResponse(RESP_ACK); }
 static void sendNack()  { sendResponse(RESP_NACK); }
 
-// ==================== ST7735S 驱动 (硬件SPI) ====================
+// ==================== ST7735S 驱动 (软件SPI) ====================
+
+// 软件 SPI：使用 GPIOA BSRR 直接操作 PA7(MOSI)/PA5(SCK)，尽量快
+static inline void swSpiWriteByte(uint8_t b) {
+  for (int8_t i = 7; i >= 0; i--) {
+    if (b & (1 << i)) GPIOA->BSRR = GPIO_BSRR_BS7; else GPIOA->BSRR = GPIO_BSRR_BR7;
+    GPIOA->BSRR = GPIO_BSRR_BS5;
+    GPIOA->BSRR = GPIO_BSRR_BR5;
+  }
+}
+
+static inline void swSpiWriteWord(uint16_t w) {
+  for (int8_t i = 15; i >= 0; i--) {
+    if (w & (1 << i)) GPIOA->BSRR = GPIO_BSRR_BS7; else GPIOA->BSRR = GPIO_BSRR_BR7;
+    GPIOA->BSRR = GPIO_BSRR_BS5;
+    GPIOA->BSRR = GPIO_BSRR_BR5;
+  }
+}
 
 static void tftWriteCmd(uint8_t cmd) {
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, LOW);
-  SPI.transfer(cmd);
+  swSpiWriteByte(cmd);
   digitalWrite(TFT_CS, HIGH);
 }
 
 static void tftWriteData(uint8_t data) {
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, HIGH);
-  SPI.transfer(data);
+  swSpiWriteByte(data);
   digitalWrite(TFT_CS, HIGH);
 }
 
 static void tftWriteData16(uint16_t data) {
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, HIGH);
-  SPI.transfer16(data);
+  swSpiWriteWord(data);
   digitalWrite(TFT_CS, HIGH);
 }
 
@@ -143,7 +160,7 @@ static void tftWriteCmdDataBytes(uint8_t cmd, const uint8_t* data, uint16_t len)
     digitalWrite(TFT_CS, LOW);
     digitalWrite(TFT_DC, HIGH);
     for (uint16_t i = 0; i < len; i++) {
-      SPI.transfer(data[i]);
+      swSpiWriteByte(data[i]);
     }
     digitalWrite(TFT_CS, HIGH);
   }
@@ -169,7 +186,7 @@ static void tftFillScreen(uint16_t color) {
   digitalWrite(TFT_DC, HIGH);
   uint32_t total = (uint32_t)g_frameWidth * g_frameHeight;
   for (uint32_t i = 0; i < total; i++) {
-    SPI.transfer16(color);
+    swSpiWriteWord(color);
   }
   digitalWrite(TFT_CS, HIGH);
 }
@@ -180,7 +197,7 @@ static void tftFillScreenDirect(uint16_t color, uint16_t w, uint16_t h) {
   digitalWrite(TFT_DC, HIGH);
   uint32_t total = (uint32_t)w * h;
   for (uint32_t i = 0; i < total; i++) {
-    SPI.transfer16(color);
+    swSpiWriteWord(color);
   }
   digitalWrite(TFT_CS, HIGH);
 }
@@ -389,7 +406,7 @@ static void drawChar(uint16_t x, uint16_t y, char c, uint16_t color) {
   for (int8_t row = 0; row < 7; row++) {
     for (int8_t col = 0; col < 5; col++) {
       bool on = (font5x7[idx][col] >> row) & 1;
-      SPI.transfer16(on ? color : 0x0000);
+      swSpiWriteWord(on ? color : 0x0000);
     }
   }
   digitalWrite(TFT_CS, HIGH);
@@ -644,12 +661,12 @@ static void playFrames() {
   digitalWrite(TFT_CS, LOW);
   digitalWrite(TFT_DC, HIGH);
 
-  // 从Flash直接读取RGB565数据并发送到SPI
+  // 从Flash直接读取RGB565数据并发送到软件SPI
   uint32_t totalPixels = (uint32_t)g_frameWidth * g_frameHeight;
   const uint16_t* flashData = (const uint16_t*)flashAddr;
 
   for (uint32_t i = 0; i < totalPixels; i++) {
-    SPI.transfer16(flashData[i]);
+    swSpiWriteWord(flashData[i]);
   }
 
   digitalWrite(TFT_CS, HIGH);
@@ -670,13 +687,11 @@ void setup() {
   digitalWrite(TFT_CS, HIGH);
   digitalWrite(TFT_LED, LOW);
 
-  // 硬件SPI1 (PA5/PA6/PA7是默认SPI1引脚)
-  SPI.setMOSI(TFT_MOSI);
-  SPI.setMISO(TFT_MISO);
-  SPI.setSCLK(TFT_SCK);
-  SPI.begin();
-  SPI.setClockDivider(SPI_CLOCK_DIV32);  // 2.25MHz (72/32)，进一步降低SPI速度以减少画面撕裂
-  SPI.setBitOrder(MSBFIRST);
+  // 软件SPI 引脚初始化
+  pinMode(TFT_MOSI, OUTPUT);
+  pinMode(TFT_SCK, OUTPUT);
+  digitalWrite(TFT_SCK, LOW);
+  digitalWrite(TFT_MOSI, LOW);
 
   tftInit();
 
