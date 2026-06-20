@@ -167,15 +167,29 @@ static void tftWriteCmdDataBytes(uint8_t cmd, const uint8_t* data, uint16_t len)
 }
 
 static void tftSetAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-  tftWriteCmd(ST7735_CASET);
-  tftWriteData16(x0);
-  tftWriteData16(x1);
+  // CASET: 列地址窗口，带 8 位填充
+  digitalWrite(TFT_CS, LOW);
+  digitalWrite(TFT_DC, LOW);
+  swSpiWriteByte(ST7735_CASET);
+  digitalWrite(TFT_DC, HIGH);
+  swSpiWriteByte(0x00); swSpiWriteByte(x0);
+  swSpiWriteByte(0x00); swSpiWriteByte(x1);
+  digitalWrite(TFT_CS, HIGH);
 
-  tftWriteCmd(ST7735_RASET);
-  tftWriteData16(y0);
-  tftWriteData16(y1);
+  // RASET: 行地址窗口，带 8 位填充
+  digitalWrite(TFT_CS, LOW);
+  digitalWrite(TFT_DC, LOW);
+  swSpiWriteByte(ST7735_RASET);
+  digitalWrite(TFT_DC, HIGH);
+  swSpiWriteByte(0x00); swSpiWriteByte(y0);
+  swSpiWriteByte(0x00); swSpiWriteByte(y1);
+  digitalWrite(TFT_CS, HIGH);
 
-  tftWriteCmd(ST7735_RAMWR);
+  // RAMWR
+  digitalWrite(TFT_CS, LOW);
+  digitalWrite(TFT_DC, LOW);
+  swSpiWriteByte(ST7735_RAMWR);
+  digitalWrite(TFT_CS, HIGH);
 }
 
 static void tftFillScreen(uint16_t color) {
@@ -227,17 +241,17 @@ static void tftInit() {
   tftWriteCmd(ST7735_SLPOUT);
   delay(120);
 
-  // 帧速率控制：降低帧率以匹配 SPI 写 GRAM 速度，避免撕裂
+  // 帧速率控制：用最低刷新率，让 GRAM 写入时间远小于帧周期
   {
-    uint8_t frm1[] = { 0x00, 0x08, 0x08 }; // 约 30Hz
+    uint8_t frm1[] = { 0x00, 0x01, 0x01 }; // 约 15Hz，降低撕裂概率
     tftWriteCmdDataBytes(ST7735_FRMCTR1, frm1, 3);
   }
   {
-    uint8_t frm2[] = { 0x00, 0x08, 0x08 };
+    uint8_t frm2[] = { 0x00, 0x01, 0x01 };
     tftWriteCmdDataBytes(ST7735_FRMCTR2, frm2, 3);
   }
   {
-    uint8_t frm3[] = { 0x00, 0x08, 0x08, 0x00, 0x08, 0x08 };
+    uint8_t frm3[] = { 0x00, 0x01, 0x01, 0x00, 0x01, 0x01 };
     tftWriteCmdDataBytes(ST7735_FRMCTR3, frm3, 6);
   }
 
@@ -652,13 +666,15 @@ static void playFrames() {
 
   uint32_t flashAddr = g_frameOffsets[currentFrame];
 
-  // 设置地址窗口（此时 TE 可能为任意状态）
-  tftSetAddrWindow(0, 0, g_frameWidth - 1, g_frameHeight - 1);
-
-  // 等待下一个 V-Blank 开始再发送 GRAM 数据，避免撕裂
+  // 等待下一个 V-Blank 开始
   waitForVSync();
 
+  // 在 V-Blank 期间开始写 GRAM：先发 RAMWR，再尽量快地写完整帧
+  tftSetAddrWindow(0, 0, g_frameWidth - 1, g_frameHeight - 1);
+
   digitalWrite(TFT_CS, LOW);
+  digitalWrite(TFT_DC, LOW);
+  swSpiWriteByte(ST7735_RAMWR);
   digitalWrite(TFT_DC, HIGH);
 
   // 从Flash直接读取RGB565数据并发送到软件SPI
