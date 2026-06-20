@@ -309,6 +309,14 @@ static void tftInit() {
 
   digitalWrite(TFT_LED, HIGH);
 
+  // 诊断：纯色测试，判断闪烁是硬件/初始化问题还是播放数据问题
+  tftFillScreenDirect(0xF800, 128, 128); // 红
+  delay(2000);
+  tftFillScreenDirect(0x07E0, 128, 128); // 绿
+  delay(2000);
+  tftFillScreenDirect(0x001F, 128, 128); // 蓝
+  delay(2000);
+
   // 清屏并显示等待提示
   tftFillScreenDirect(0x0000, 128, 128);
   drawString(16, 60, "Waiting for data", 0xFFFF);
