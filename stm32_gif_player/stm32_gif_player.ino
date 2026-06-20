@@ -567,6 +567,7 @@ void setup() {
   }
 
   delay(200);
+  Serial.flush();
   sendReady();
 }
 

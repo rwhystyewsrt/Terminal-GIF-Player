@@ -47,7 +47,7 @@ RESP_DONE   = 0x05
 def read_config(config_path="config.ini"):
     """读取 config.ini 配置文件"""
     cfg = configparser.ConfigParser()
-    cfg.read(config_path, encoding='utf-8')
+    cfg.read(config_path, encoding='utf-8-sig')
 
     return {
         'gif_path': cfg.get('General', 'GifPath', fallback='./assets/cat.gif'),
