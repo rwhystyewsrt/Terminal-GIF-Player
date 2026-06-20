@@ -137,35 +137,47 @@ static void tftWriteData16(uint16_t data) {
 }
 
 static void tftWriteCmdDataBytes(uint8_t cmd, const uint8_t* data, uint16_t len) {
-  tftWriteCmd(cmd);
+  digitalWrite(TFT_CS, LOW);
+
+  digitalWrite(TFT_DC, LOW);
+  SPI.transfer(cmd);
+
   if (data && len > 0) {
-    digitalWrite(TFT_CS, LOW);
     digitalWrite(TFT_DC, HIGH);
     for (uint16_t i = 0; i < len; i++) {
       SPI.transfer(data[i]);
     }
-    digitalWrite(TFT_CS, HIGH);
   }
+
+  digitalWrite(TFT_CS, HIGH);
 }
 
 static void tftSetAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-  tftWriteCmd(ST7735_CASET);
-  tftWriteData16(x0);
-  tftWriteData16(x1);
+  // CS 全程拉低，连续发送 CASET/RASET/RAMWR
+  // 注意：调用者需要在写完后自己拉高 CS
+  digitalWrite(TFT_CS, LOW);
 
-  tftWriteCmd(ST7735_RASET);
-  tftWriteData16(y0);
-  tftWriteData16(y1);
+  digitalWrite(TFT_DC, LOW);
+  SPI.transfer(ST7735_CASET);
+  digitalWrite(TFT_DC, HIGH);
+  SPI.transfer(0x00); SPI.transfer(x0);
+  SPI.transfer(0x00); SPI.transfer(x1);
 
-  tftWriteCmd(ST7735_RAMWR);
+  digitalWrite(TFT_DC, LOW);
+  SPI.transfer(ST7735_RASET);
+  digitalWrite(TFT_DC, HIGH);
+  SPI.transfer(0x00); SPI.transfer(y0);
+  SPI.transfer(0x00); SPI.transfer(y1);
+
+  digitalWrite(TFT_DC, LOW);
+  SPI.transfer(ST7735_RAMWR);
+  digitalWrite(TFT_DC, HIGH);
 }
 
 static void tftFillScreen(uint16_t color) {
   if (g_frameWidth == 0 || g_frameHeight == 0) return;
   tftSetAddrWindow(0, 0, g_frameWidth - 1, g_frameHeight - 1);
 
-  digitalWrite(TFT_CS, LOW);
-  digitalWrite(TFT_DC, HIGH);
   uint32_t total = (uint32_t)g_frameWidth * g_frameHeight;
   for (uint32_t i = 0; i < total; i++) {
     SPI.transfer16(color);
@@ -175,8 +187,6 @@ static void tftFillScreen(uint16_t color) {
 
 static void tftFillScreenDirect(uint16_t color, uint16_t w, uint16_t h) {
   tftSetAddrWindow(0, 0, w - 1, h - 1);
-  digitalWrite(TFT_CS, LOW);
-  digitalWrite(TFT_DC, HIGH);
   uint32_t total = (uint32_t)w * h;
   for (uint32_t i = 0; i < total; i++) {
     SPI.transfer16(color);
@@ -615,15 +625,13 @@ static void playFrames() {
   static uint32_t lastFrameTime = 0;
 
   uint32_t now = millis();
-  if (now - lastFrameTime < 200) return;  // 强制 200ms 一帧，排查是否帧率过快导致闪烁
+  if (now - lastFrameTime < g_frameDelayMs) return;
   lastFrameTime = now;
 
   uint32_t flashAddr = g_frameOffsets[currentFrame];
 
+  // 设置地址窗口（包含 RAMWR 命令，CS 已拉低，DC 已置高）
   tftSetAddrWindow(0, 0, g_frameWidth - 1, g_frameHeight - 1);
-
-  digitalWrite(TFT_CS, LOW);
-  digitalWrite(TFT_DC, HIGH);
 
   // 从Flash直接读取RGB565数据并发送到硬件SPI
   uint32_t totalPixels = (uint32_t)g_frameWidth * g_frameHeight;
@@ -656,7 +664,7 @@ void setup() {
   SPI.setMISO(TFT_MISO);
   SPI.setSCLK(TFT_SCK);
   SPI.begin();
-  SPI.setClockDivider(SPI_CLOCK_DIV4);  // 18MHz (72/4)
+  SPI.setClockDivider(SPI_CLOCK_DIV16);  // 4.5MHz (72/16), 提高稳定性
   SPI.setBitOrder(MSBFIRST);
 
   tftInit();
